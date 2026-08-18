@@ -1,0 +1,43 @@
+# Copyright (c) 2026 CroissAndro and Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+
+load("@rules_pkg//pkg:install.bzl", "pkg_install")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
+load("//build/kernel/kleaf:constants.bzl", "COMMON_KCFLAGS", "X86_64_OUTS")
+load("//build/kernel/kleaf:kernel.bzl", "kernel_build")
+
+package(default_visibility = ["//visibility:public"])
+
+# This is a full source build rather than a mixed device-module build. The
+# Hyper-V storage and bus drivers alter the bootable kernel configuration and
+# therefore cannot be layered on top of an already-built GKI kernel.
+kernel_build(
+    name = "croissandro_x86_64",
+    srcs = ["//common:kernel_x86_64_sources"],
+    outs = X86_64_OUTS,
+    arch = "x86_64",
+    check_defconfig = "match",
+    defconfig = "//common:arch/x86/configs/gki_defconfig",
+    kcflags = COMMON_KCFLAGS,
+    make_goals = ["bzImage"],
+    makefile = "//common:Makefile",
+    pahole = "//common:pahole",
+    post_defconfig_fragments = ["config/hyperv_x86_64.fragment"],
+)
+
+pkg_files(
+    name = "croissandro_x86_64_dist_files",
+    srcs = [":croissandro_x86_64"],
+    strip_prefix = strip_prefix.files_only(),
+)
+
+pkg_install(
+    name = "croissandro_x86_64_dist",
+    srcs = [":croissandro_x86_64_dist_files"],
+    destdir = "out/croissandro_x86_64/dist",
+)
