@@ -1,155 +1,128 @@
 # CroissAndro kernel build
 
-This repository owns the CroissAndro kernel **configuration and build policy**.
-It does not contain Linux source and it does not contain released binaries.
+This repository owns the Hyper-V x86-64 kernel configuration and Kleaf build
+policy for CroissAndro. It contains neither Android Common Kernel (ACK) source
+nor published kernel binaries.
 
-The source checkout is an Android Common Kernel (ACK) workspace, while built
-artifacts are published separately. The canonical `repo` layout is:
+The canonical kernel local manifest checks it out inside the ACK workspace:
 
 ```text
-croissandro/
-├── kernel/                 ACK repo workspace
-│   ├── build/kernel/
-│   ├── common/
-│   ├── croissandro/        this Git repository
-│   └── tools/bazel
-└── kernel-prebuilts/       versioned artifacts consumed by the AOSP product
+kernel/
+├── build/kernel/          upstream Kleaf
+├── common/                upstream ACK source
+├── croissandro/           this repository
+└── tools/bazel
 ```
 
-During initial development this repository may remain beside `kernel/` as
-`kernel-build/`. The scripts support that layout through Bazel's package path,
-but a pinned kernel manifest should eventually place it at `kernel/croissandro`.
+The scripts also support the early-development layout where `kernel/` and
+`kernel-build/` are siblings. The manifest-managed layout above is the release
+model.
 
-## Scope
+## Repository family
 
-The initial target is an x86_64 Android GKI-derived kernel that can reach a
-diagnostic userspace as a normal Hyper-V guest. Hyper-V boot-critical drivers
-are built into `bzImage`; PI-1 must not depend on a vendor module partition or
-an early userspace module loader.
+| Repository | Responsibility |
+|---|---|
+| [`manifest`](https://github.com/croissandro/manifest) | Adds CroissAndro projects to the AOSP and ACK workspaces |
+| [`croissandro`](https://github.com/croissandro/croissandro) | Android product, board and device policy |
+| [`kernel-build`](https://github.com/croissandro/kernel-build) | Hyper-V kernel configuration and Kleaf build logic — this repository |
+| [`kernel-prebuilts`](https://github.com/croissandro/kernel-prebuilts) | Reviewed kernel artifacts consumed by AOSP |
 
-The fragment enables:
+## Current product increment
 
-- Hyper-V core, timer and VMBus support;
-- StorVSC for the root/block device;
-- NetVSC for the synthetic network adapter;
+The initial target supports **PI-1: kernel boot**. It is a full x86-64
+GKI-derived source build because Hyper-V boot drivers change the bootable
+kernel configuration and cannot be layered onto an already-built GKI image as
+device modules.
+
+Boot-critical drivers are built into `bzImage` until CroissAndro owns a tested
+initramfs and module-partition contract. The fragment enables:
+
+- Hyper-V core, timer, and VMBus;
+- StorVSC and NetVSC;
 - Hyper-V PCI frontend and IRQ/IOMMU handling;
-- Hyper-V keyboard and HID mouse input;
-- Hyper-V sockets for a future host/guest control transport;
-- guest utilities and dynamic-memory ballooning.
+- synthetic keyboard and HID mouse;
+- Hyper-V sockets, guest utilities, and dynamic-memory ballooning.
 
-It intentionally does not enable Cuttlefish/Goldfish, virtio-gpu, MANA/Azure
-accelerated networking, Hyper-V root-partition mode, or experimental VTL mode.
-Graphics and Android boot-image integration are later product increments.
+It intentionally excludes Cuttlefish/Goldfish drivers, virtio-gpu,
+MANA/Azure accelerated networking, Hyper-V root-partition mode, and VTL mode.
+Graphics and complete Android boot integration belong to later increments.
 
-## Prerequisites
+## Initialize the ACK workspace
 
-Initialize and sync an ACK workspace with Kleaf and the prebuilt toolchains.
-Follow the AOSP kernel guide and use `repo` to fetch the sources, build tools,
-and pinned compiler together. In the canonical layout:
+Use [`kernel-manifest.xml`](https://github.com/croissandro/manifest/blob/main/kernel-manifest.xml)
+from the manifest repository. It places this project at `kernel/croissandro`.
+The checked-out ACK revision and compiler are the source of truth for a build.
 
-```shell
-test -x ../tools/bazel
-test -f ../common/arch/x86/configs/gki_defconfig
-```
+The current `common-android-mainline` checkout is exploratory. Pin a compatible
+ACK release branch and reviewed revisions before publishing artifacts.
 
-The kernel manifest project entry for this repository should use a path such
-as `croissandro`; keep the Android platform device repository and binary
-prebuilt repository out of the kernel source checkout.
+## Validate and build
 
-For example, a kernel-workspace local manifest can contain:
+From `kernel/croissandro`:
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<manifest>
-  <remote name="croissandro-github" fetch="https://github.com/" />
-  <project
-      name="croissandro/kernel-build.git"
-      path="croissandro"
-      remote="croissandro-github"
-      revision="main" />
-</manifest>
-```
-
-For reproducible builds, replace `main` with a reviewed tag or commit in the
-release manifest.
-
-The checked-out ACK revision is the source of truth. Keep it pinned in the
-kernel manifest; do not silently build whatever happens to be at the tip of
-`android-mainline` for a published release.
-
-## Build
-
-From this repository:
-
-```shell
+```sh
+./check-config.sh
 ./build.sh
 ```
 
-Override the ACK checkout in the sibling development layout when necessary:
+`check-config.sh` merges the x86-64 GKI defconfig with
+[`config/hyperv_x86_64.fragment`](config/hyperv_x86_64.fragment), runs
+`olddefconfig`, and verifies that Kconfig resolved every requested value
+exactly.
 
-```shell
-KERNEL_WORKSPACE=/path/to/kernel ./build.sh
-```
+`build.sh` invokes the Kleaf distribution target. In the canonical workspace
+it is equivalent to:
 
-The script invokes the documented Kleaf `*_dist` pattern. In the canonical
-layout this is equivalent to:
-
-```shell
+```sh
 tools/bazel run //croissandro:croissandro_x86_64_dist
 ```
 
-Select an explicit distribution directory using the same `--destdir` contract
-shown in the official guide:
+Choose an explicit distribution directory when preparing a publication:
 
-```shell
-DIST_DIR=/path/to/dist ./build.sh
+```sh
+DIST_DIR=/absolute/path/to/dist ./build.sh
 ```
 
-Without `DIST_DIR`, the sibling layout writes the distribution to:
+Important outputs include:
 
-```text
-../kernel/out/croissandro_x86_64/dist/
-```
-
-Important outputs are:
-
-- `bzImage` — kernel image later packaged by the Android device repository;
+- `bzImage` — the x86-64 kernel image;
 - `vmlinux` and `System.map` — debugging and symbolization;
-- `vmlinux.symvers` — kernel symbol/version information;
-- `modules.builtin` and `modules.builtin.modinfo` — built-in driver inventory.
+- `vmlinux.symvers` — symbol/version information;
+- `modules.builtin` and `modules.builtin.modinfo` — built-in inventory.
 
-Run the configuration checker without compiling the kernel:
+If the build reports a missing manifest project, sync that project from the
+kernel workspace. For example:
 
-```shell
-./check-config.sh
+```sh
+repo sync -c prebuilts/clang/host/linux-x86
 ```
-
-It merges the x86_64 GKI defconfig with the CroissAndro fragment, resolves
-Kconfig dependencies with `olddefconfig`, and verifies every requested value.
 
 ## Configuration policy
 
-Edit [`config/hyperv_x86_64.fragment`](config/hyperv_x86_64.fragment), not the
-ACK `gki_defconfig`. Kleaf applies it as a checked post-defconfig fragment, so
-an unavailable symbol or an unmet dependency fails the build instead of being
-quietly dropped.
+Edit `config/hyperv_x86_64.fragment`, not upstream `gki_defconfig`. Kleaf uses
+it as a checked post-defconfig fragment, so an unavailable symbol or unmet
+dependency fails instead of being silently discarded.
 
-Keep boot-path drivers built in (`=y`) until the Android product owns a tested
-initramfs and module-partition contract. Add optional devices only when a
-product increment has a consumer and a boot/runtime test.
+Add an option only when a product increment has a consumer and a boot/runtime
+test. Keep optional drivers out of the kernel until module loading and the
+relevant Android or host interface are defined.
 
-## Publishing and AOSP integration
+## Publication contract
 
-Do not make the AOSP device tree consume `kernel/out` directly. After boot and
-config validation, copy a reviewed distribution into `kernel-prebuilts`,
-record the ACK and `kernel-build` commits, and make the device product consume
-that immutable prebuilt. This keeps normal AOSP builds hermetic and avoids
-rebuilding the kernel during every `m` invocation.
+Do not make the Android device tree consume `kernel/out` directly. After
+config, boot, and compatibility validation:
 
-PI-1 should introduce the kernel plus a diagnostic ramdisk/boot image. Only
-then should `TARGET_NO_KERNEL := true` be removed from the device BoardConfig.
+1. record the ACK branch and commit;
+2. record the `kernel-build` commit and compiler identity;
+3. copy the reviewed distribution into `kernel-prebuilts`;
+4. generate checksums and provenance metadata;
+5. pin the prebuilt revision in the AOSP manifest.
+
+The AOSP overlay currently mounts `kernel-prebuilts` under a `6.18` namespace.
+Do not publish a mainline 7.x build into that namespace; align the ACK branch
+and publication path deliberately before PI-1 integration.
 
 ## References
 
-- [Build kernels](https://source.android.com/docs/setup/build/building-kernels)
+- [Build Android kernels](https://source.android.com/docs/setup/build/building-kernels)
 - [Kleaf defconfig fragments](https://android.googlesource.com/kernel/build/+/refs/heads/main-kernel/kleaf/docs/kernel_config.md#defconfig-fragments)
